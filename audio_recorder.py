@@ -1,5 +1,21 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
+import kivy
+from kivy.app import App
+from kivy.core.window import Window
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.slider import Slider
+from kivy.uix.progressbar import ProgressBar
+from kivy.uix.popup import Popup
+from kivy.uix.dropdown import DropDown
+from kivy.uix.spinner import Spinner
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.core.window import Window
+
 import pyaudio
 import wave
 import numpy as np
@@ -9,6 +25,24 @@ from datetime import datetime
 import time
 import configparser
 
+class AudioRecorderApp(App):
+    def build(self):
+        # Configurar ventana
+        Window.title = "Grabador de Audio con Detección de Volumen"
+        Window.size = (500, 600)
+        Window.minimum_width = 400
+        Window.minimum_height = 500
+        
+        # Crear instancia del grabador
+        self.recorder = AudioRecorder()
+        return self.recorder.setup_ui()
+    
+    def on_stop(self):
+        """Método de Kivy llamado cuando la aplicación se cierra"""
+        if hasattr(self, 'recorder'):
+            self.recorder.on_closing()
+        return super().on_stop()
+
 class AudioRecorder:
     def __init__(self):
         # Archivo de configuración
@@ -16,12 +50,6 @@ class AudioRecorder:
         
         # Cargar configuración desde archivo
         self.load_config()
-        
-        self.root = tk.Tk()
-        self.root.title("Grabador de Audio con Detección de Volumen")
-        self.root.geometry("500x500")
-        self.root.resizable(True, True)
-        self.root.minsize(400, 500)  # Tamaño mínimo para la interfaz principal más simple
         
         # Configuración de audio - Cargada desde config.ini
         self.CHUNK = self.config_chunk_size
@@ -33,24 +61,24 @@ class AudioRecorder:
         # Variables de estado - Inicializadas desde config.ini
         self.is_recording = False
         self.audio = None
-        self.threshold_db = tk.DoubleVar(value=self.config_threshold_db)
-        self.record_duration = tk.DoubleVar(value=self.config_record_seconds)
-        self.current_volume = tk.StringVar(value="0.0 dB")
-        self.status = tk.StringVar(value="Detenido")
-        self.recordings_saved = tk.IntVar(value=0)
-        self.recordings_deleted = tk.IntVar(value=0)
-        self.will_save_current = tk.StringVar(value="Esperando...")  # Estado del tramo actual
+        self.threshold_db = self.config_threshold_db
+        self.record_duration = self.config_record_seconds
+        self.current_volume_text = "0.0 dB"
+        self.status_text = "Detenido"
+        self.recordings_saved_count = 0
+        self.recordings_deleted_count = 0
+        self.will_save_current_text = "Esperando..."  # Estado del tramo actual
         self.current_max_volume = -60.0  # Volumen máximo del tramo actual
         
         # Variables para tracking de tiempo
         self.recording_start_time = 0  # Tiempo de inicio de la grabación actual
-        self.current_recording_time = tk.StringVar(value="0/30 seg")  # Tiempo transcurrido/total
+        self.current_recording_time_text = "0/30 seg"  # Tiempo transcurrido/total
         
         # Variables para calidad de audio - Inicializadas desde config.ini
-        self.sample_rate = tk.StringVar(value=str(self.config_sample_rate))
-        self.bit_depth = tk.StringVar(value=str(self.config_bit_depth))
-        self.channels_mode = tk.StringVar(value="Estéreo" if self.config_channels == 2 else "Mono")
-        self.selected_device = tk.StringVar()  # Dispositivo de audio seleccionado
+        self.sample_rate_text = str(self.config_sample_rate)
+        self.bit_depth_text = str(self.config_bit_depth)
+        self.channels_mode_text = "Estéreo" if self.config_channels == 2 else "Mono"
+        self.selected_device_text = ""  # Dispositivo de audio seleccionado
         self.audio_devices = []  # Lista de dispositivos disponibles
         
         # Directorio para guardar grabaciones - Desde config.ini
@@ -58,7 +86,16 @@ class AudioRecorder:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
             
-        self.setup_ui()
+        # Referencias a widgets Kivy (se asignarán en setup_ui)
+        self.volume_bar = None
+        self.current_volume_label = None
+        self.status_label = None
+        self.current_status_label = None
+        self.recordings_saved_label = None
+        self.recordings_deleted_label = None
+        self.start_button = None
+        self.stop_button = None
+            
         self.refresh_audio_devices()  # Cargar dispositivos al inicializar
         
     def load_config(self):
@@ -191,13 +228,13 @@ class AudioRecorder:
         
         try:
             # Guardar valores actuales
-            config.set('AUDIO', 'RECORD_SECONDS', str(int(self.record_duration.get())))
+            config.set('AUDIO', 'RECORD_SECONDS', str(int(self.record_duration)))
             config.set('AUDIO', 'SAMPLE_RATE', str(self.RATE))
             config.set('AUDIO', 'CHANNELS', str(self.CHANNELS))
             config.set('AUDIO', 'FORMAT', str(self.config_bit_depth))
             config.set('AUDIO', 'CHUNK_SIZE', str(self.CHUNK))
             
-            config.set('INTERFACE', 'DEFAULT_THRESHOLD_DB', str(self.threshold_db.get()))
+            config.set('INTERFACE', 'DEFAULT_THRESHOLD_DB', str(self.threshold_db))
             config.set('INTERFACE', 'MIN_THRESHOLD_DB', str(self.config_min_threshold_db))
             config.set('INTERFACE', 'MAX_THRESHOLD_DB', str(self.config_max_threshold_db))
             
@@ -216,7 +253,7 @@ class AudioRecorder:
                 
                 f.write("[AUDIO]\n")
                 f.write(f"# Duración de cada grabación en segundos\n")
-                f.write(f"RECORD_SECONDS = {int(self.record_duration.get())}\n\n")
+                f.write(f"RECORD_SECONDS = {int(self.record_duration)}\n\n")
                 
                 f.write(f"# Calidad de audio\n")
                 f.write(f"SAMPLE_RATE = {self.RATE}  # Hz\n")
@@ -228,7 +265,7 @@ class AudioRecorder:
                 
                 f.write("[INTERFACE]\n")
                 f.write(f"# Umbral por defecto en decibelios\n")
-                f.write(f"DEFAULT_THRESHOLD_DB = {self.threshold_db.get()}\n\n")
+                f.write(f"DEFAULT_THRESHOLD_DB = {self.threshold_db}\n\n")
                 
                 f.write(f"# Rango del slider de umbral\n")
                 f.write(f"MIN_THRESHOLD_DB = {self.config_min_threshold_db}\n")
@@ -254,7 +291,7 @@ class AudioRecorder:
         except Exception as e:
             print(f"Error guardando configuración: {e}")
             if show_messages:
-                messagebox.showerror("Error", f"No se pudo guardar la configuración: {str(e)}")
+                self.show_message("Error", f"No se pudo guardar la configuración: {str(e)}", "error")
         
     def refresh_audio_devices(self):
         """Obtiene la lista de dispositivos de audio de entrada disponibles y los valida"""
@@ -314,7 +351,7 @@ class AudioRecorder:
             
             # Establecer el dispositivo por defecto si hay dispositivos disponibles
             if self.audio_devices:
-                self.selected_device.set(self.audio_devices[0]['display_name'])
+                self.selected_device_name = self.audio_devices[0]['display_name']
             else:
                 # Añadir dispositivo por defecto si no se encuentra ninguno compatible
                 self.audio_devices.append({
@@ -325,7 +362,7 @@ class AudioRecorder:
                     'sample_rate': 44100
                 })
                 device_names.append('Dispositivo por defecto del sistema')
-                self.selected_device.set('Dispositivo por defecto del sistema')
+                self.selected_device_name = 'Dispositivo por defecto del sistema'
             
             return device_names
             
@@ -342,321 +379,565 @@ class AudioRecorder:
             return ["Dispositivo por defecto del sistema"]
         
     def setup_ui(self):
-        """Configura la interfaz de usuario"""
-        # Configurar el grid del root para que se expanda
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)  # Row 1 para el contenido principal
-        
-        # Crear barra de menús
-        self.create_menu_bar()
-        
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configurar el grid del frame principal
-        main_frame.columnconfigure(0, weight=1)
+        """Configura la interfaz de usuario en Kivy"""
+        # Layout principal
+        main_layout = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
         
         # Título
-        title_label = ttk.Label(main_frame, text="Grabador de Audio con Detección de Volumen", 
-                               font=('Arial', 16, 'bold'))
-        title_label.grid(row=0, column=0, pady=(0, 20))
+        title_label = Label(
+            text="Grabador de Audio con Detección de Volumen",
+            size_hint_y=None,
+            height=dp(40),
+            font_size='18sp',
+            bold=True,
+            color=(0.2, 0.2, 0.2, 1)
+        )
+        main_layout.add_widget(title_label)
         
-        # Monitor de volumen (PRIMER ELEMENTO)
-        self.create_volume_monitor(main_frame, row=1)
+        # Monitor de volumen
+        volume_layout = self.create_volume_monitor()
+        main_layout.add_widget(volume_layout)
         
-        # Estado Actual (SEGUNDO ELEMENTO)
-        self.create_status_frame(main_frame, row=2)
+        # Estado actual
+        status_layout = self.create_status_frame()
+        main_layout.add_widget(status_layout)
         
-        # Estadísticas (TERCER ELEMENTO)
-        self.create_statistics_frame(main_frame, row=3)
+        # Estadísticas
+        stats_layout = self.create_statistics_frame()
+        main_layout.add_widget(stats_layout)
         
-        # Botones (CUARTO ELEMENTO)
-        self.create_buttons_frame(main_frame, row=4)
+        # Botones
+        buttons_layout = self.create_buttons_frame()
+        main_layout.add_widget(buttons_layout)
         
-        # Inicializar la lista de dispositivos
-        self.update_device_list()
+        # Menú mediante botones
+        menu_layout = self.create_menu_bar()
+        main_layout.add_widget(menu_layout)
+        
+        return main_layout
         
     def create_menu_bar(self):
-        """Crea la barra de menús"""
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
+        """Crea una barra de menús usando botones"""
+        menu_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
         
-        # Menú Config único con submenús
-        config_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="⚙️ Config", menu=config_menu)
+        # Botón de configuración de audio
+        audio_btn = Button(
+            text="Audio",
+            size_hint_x=None,
+            width=dp(100),
+            on_press=self.open_audio_config
+        )
+        menu_layout.add_widget(audio_btn)
         
-        # Submenú Audio
-        config_menu.add_command(label="🎙️ Audio...", command=self.open_audio_config)
+        # Botón de configuración de grabación
+        recording_btn = Button(
+            text="Grabación",
+            size_hint_x=None,
+            width=dp(120),
+            on_press=self.open_recording_config
+        )
+        menu_layout.add_widget(recording_btn)
         
-        # Submenú Grabación  
-        config_menu.add_command(label="📊 Grabación...", command=self.open_recording_config)
+        # Espacio flexible
+        menu_layout.add_widget(Label())
         
-        # Separador
-        config_menu.add_separator()
+        # Botón de salir
+        exit_btn = Button(
+            text="Salir",
+            size_hint_x=None,
+            width=dp(100),
+            on_press=self.show_exit_confirmation
+        )
+        menu_layout.add_widget(exit_btn)
         
-        # Acerca de
-        config_menu.add_command(label="ℹ️ Acerca de...", command=self.show_about)
+        return menu_layout
         
-    def create_volume_monitor(self, parent, row):
+    def create_volume_monitor(self):
         """Crea el monitor de volumen"""
-        volume_frame = ttk.LabelFrame(parent, text="Monitor de Volumen", padding="15")
-        volume_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        volume_frame.columnconfigure(0, weight=1)
+        # Layout contenedor
+        container = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(100), spacing=dp(10))
         
-        self.volume_bar = ttk.Progressbar(volume_frame, length=400, mode='determinate')
-        self.volume_bar.grid(row=0, column=0, pady=5, sticky=(tk.W, tk.E))
+        # Título
+        title = Label(
+            text="Monitor de Volumen",
+            size_hint_y=None,
+            height=dp(30),
+            font_size='14sp',
+            bold=True
+        )
+        container.add_widget(title)
         
-    def create_status_frame(self, parent, row):
+        # Barra de progreso
+        self.volume_bar = ProgressBar(
+            max=100,
+            value=0,
+            size_hint_y=None,
+            height=dp(20)
+        )
+        container.add_widget(self.volume_bar)
+        
+        return container
+        
+    def create_status_frame(self):
         """Crea el frame de estado actual"""
-        status_frame = ttk.LabelFrame(parent, text="Estado Actual", padding="15")
-        status_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        status_frame.columnconfigure(1, weight=1)
+        # Layout contenedor
+        container = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(180), spacing=dp(5))
         
-        ttk.Label(status_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(status_frame, textvariable=self.status, font=('Arial', 10, 'bold')).grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        # Título
+        title = Label(
+            text="Estado Actual",
+            size_hint_y=None,
+            height=dp(30),
+            font_size='14sp',
+            bold=True
+        )
+        container.add_widget(title)
         
-        ttk.Label(status_frame, text="Volumen actual:").grid(row=1, column=0, sticky=tk.W)
-        ttk.Label(status_frame, textvariable=self.current_volume).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        # Grid de información
+        info_grid = GridLayout(cols=2, size_hint_y=None, height=dp(150), spacing=dp(10))
         
-        ttk.Label(status_frame, text="Tramo actual:").grid(row=2, column=0, sticky=tk.W)
-        self.current_status_label = ttk.Label(status_frame, textvariable=self.will_save_current, font=('Arial', 10, 'bold'))
-        self.current_status_label.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
+        # Estado
+        info_grid.add_widget(Label(text="Estado:", halign='left', valign='middle'))
+        self.status_label = Label(text=self.status_text, halign='left', valign='middle', bold=True)
+        info_grid.add_widget(self.status_label)
         
-        # Tiempo transcurrido en el bucle actual
-        ttk.Label(status_frame, text="Tiempo bucle:").grid(row=3, column=0, sticky=tk.W)
-        ttk.Label(status_frame, textvariable=self.current_recording_time, font=('Arial', 10, 'bold')).grid(row=3, column=1, sticky=tk.W, padx=(10, 0))
+        # Volumen actual
+        info_grid.add_widget(Label(text="Volumen actual:", halign='left', valign='middle'))
+        self.current_volume_label = Label(text=self.current_volume_text, halign='left', valign='middle')
+        info_grid.add_widget(self.current_volume_label)
         
-        ttk.Label(status_frame, text="Calidad actual:").grid(row=4, column=0, sticky=tk.W)
-        self.quality_info = tk.StringVar(value=f"{self.RATE}Hz, {16}bit, {'Mono'}")
-        ttk.Label(status_frame, textvariable=self.quality_info, font=('Arial', 9)).grid(row=4, column=1, sticky=tk.W, padx=(10, 0))
+        # Tramo actual
+        info_grid.add_widget(Label(text="Tramo actual:", halign='left', valign='middle'))
+        self.current_status_label = Label(text=self.will_save_current_text, halign='left', valign='middle', bold=True)
+        info_grid.add_widget(self.current_status_label)
         
-        ttk.Label(status_frame, text="Micrófono:").grid(row=5, column=0, sticky=tk.W)
-        self.mic_info = tk.StringVar(value="Seleccionar micrófono")
-        ttk.Label(status_frame, textvariable=self.mic_info, font=('Arial', 9)).grid(row=5, column=1, sticky=tk.W, padx=(10, 0))
+        # Tiempo de bucle
+        info_grid.add_widget(Label(text="Tiempo bucle:", halign='left', valign='middle'))
+        self.current_recording_time_label = Label(text=self.current_recording_time_text, halign='left', valign='middle', bold=True)
+        info_grid.add_widget(self.current_recording_time_label)
         
-    def create_statistics_frame(self, parent, row):
+        # Calidad actual
+        quality_text = f"{self.RATE}Hz, {16}bit, {'Mono'}"
+        info_grid.add_widget(Label(text="Calidad actual:", halign='left', valign='middle'))
+        self.quality_info_label = Label(text=quality_text, halign='left', valign='middle', font_size='12sp')
+        info_grid.add_widget(self.quality_info_label)
+        
+        # Micrófono
+        info_grid.add_widget(Label(text="Micrófono:", halign='left', valign='middle'))
+        self.mic_info_label = Label(text="Seleccionar micrófono", halign='left', valign='middle', font_size='12sp')
+        info_grid.add_widget(self.mic_info_label)
+        
+        container.add_widget(info_grid)
+        return container
+        
+    def create_statistics_frame(self):
         """Crea el frame de estadísticas"""
-        stats_frame = ttk.LabelFrame(parent, text="Estadísticas", padding="15")
-        stats_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        stats_frame.columnconfigure(1, weight=1)
+        # Layout contenedor
+        container = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(100), spacing=dp(10))
         
-        ttk.Label(stats_frame, text="Grabaciones guardadas:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(stats_frame, textvariable=self.recordings_saved, font=('Arial', 10, 'bold')).grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        # Título
+        title = Label(
+            text="Estadísticas",
+            size_hint_y=None,
+            height=dp(30),
+            font_size='14sp',
+            bold=True
+        )
+        container.add_widget(title)
         
-        ttk.Label(stats_frame, text="Grabaciones eliminadas:").grid(row=1, column=0, sticky=tk.W)
-        ttk.Label(stats_frame, textvariable=self.recordings_deleted, font=('Arial', 10, 'bold')).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        # Grid de estadísticas
+        stats_grid = GridLayout(cols=2, size_hint_y=None, height=dp(60), spacing=dp(10))
         
-    def create_buttons_frame(self, parent, row):
+        # Grabaciones guardadas
+        stats_grid.add_widget(Label(text="Grabaciones guardadas:", halign='left', valign='middle'))
+        self.recordings_saved_label = Label(text=str(self.recordings_saved_count), halign='left', valign='middle', bold=True)
+        stats_grid.add_widget(self.recordings_saved_label)
+        
+        # Grabaciones eliminadas
+        stats_grid.add_widget(Label(text="Grabaciones eliminadas:", halign='left', valign='middle'))
+        self.recordings_deleted_label = Label(text=str(self.recordings_deleted_count), halign='left', valign='middle', bold=True)
+        stats_grid.add_widget(self.recordings_deleted_label)
+        
+        container.add_widget(stats_grid)
+        return container
+        
+    def create_buttons_frame(self):
         """Crea el frame de botones"""
-        button_frame = ttk.Frame(parent)
-        button_frame.grid(row=row, column=0, pady=20)
+        button_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(60), spacing=dp(20))
         
-        self.start_button = ttk.Button(button_frame, text="🎙️ Iniciar Grabación", 
-                                     command=self.start_recording)
-        self.start_button.grid(row=0, column=0, padx=(0, 15))
+        # Botón iniciar
+        self.start_button = Button(
+            text="Iniciar Grabación",
+            size_hint_x=0.5,
+            on_press=self.start_recording
+        )
+        button_layout.add_widget(self.start_button)
         
-        self.stop_button = ttk.Button(button_frame, text="⏹️ Detener Grabación", 
-                                    command=self.stop_recording, state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, padx=(15, 0))
+        # Botón detener
+        self.stop_button = Button(
+            text="Detener Grabación",
+            size_hint_x=0.5,
+            disabled=True,
+            on_press=self.stop_recording
+        )
+        button_layout.add_widget(self.stop_button)
+        
+        return button_layout
         
     def update_device_list(self):
-        """Actualiza la lista de dispositivos en el combobox"""
-        try:
-            device_names = []
-            for device in self.audio_devices:
-                device_names.append(device['display_name'])
-            
-            if hasattr(self, 'device_combo'):
-                self.device_combo['values'] = device_names
-                
-        except Exception as e:
-            print(f"Error actualizando lista de dispositivos: {e}")
-            
-    def open_audio_config(self):
-        """Abre la ventana modal de configuración de audio"""
-        # Crear ventana modal
-        audio_window = tk.Toplevel(self.root)
-        audio_window.title("Configuración de Audio")
-        audio_window.geometry("550x550")
-        audio_window.resizable(False, False)
-        audio_window.transient(self.root)
-        audio_window.grab_set()  # Modal
+        """Actualiza la lista de dispositivos (mantener para compatibilidad)"""
+        pass  # No se usa en Kivy, pero mantenemos para compatibilidad
         
-        # Centrar la ventana
-        audio_window.geometry("+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50))
+    def show_message(self, title, message, message_type="info"):
+        """Muestra un mensaje usando popup de Kivy"""
+        popup_content = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(10))
         
-        # Frame principal
-        main_frame = ttk.Frame(audio_window, padding="20")
-        main_frame.pack(fill="both", expand=True)
+        # Mensaje
+        message_label = Label(
+            text=message,
+            text_size=(dp(300), None),
+            halign='center',
+            valign='middle'
+        )
+        popup_content.add_widget(message_label)
+        
+        # Botón cerrar
+        close_btn = Button(
+            text="Cerrar",
+            size_hint_y=None,
+            height=dp(40),
+            on_press=lambda x: popup.dismiss()
+        )
+        popup_content.add_widget(close_btn)
+        
+        popup = Popup(
+            title=title,
+            content=popup_content,
+            size_hint=(0.8, 0.4)
+        )
+        popup.open()
+        
+    def on_threshold_change(self, instance, value):
+        """Actualiza el valor del umbral cuando cambia el slider"""
+        self.threshold_db = value
+        if hasattr(self, 'threshold_value_label'):
+            self.threshold_value_label.text = f"{value:.1f} dB"
+        # Programar guardado automático
+        Clock.unschedule(self.save_config)
+        Clock.schedule_once(lambda dt: self.save_config(show_messages=False), 1)
+        
+    def on_duration_change(self, instance, value):
+        """Actualiza el valor de duración cuando cambia el slider"""
+        self.record_duration = value
+        if hasattr(self, 'duration_value_label'):
+            self.duration_value_label.text = f"{value:.0f} seg"
+        # Actualizar contador si no estamos grabando
+        if not self.is_recording:
+            self.current_recording_time_text = f"0/{int(value)} seg"
+            if hasattr(self, 'current_recording_time_label'):
+                self.current_recording_time_label.text = self.current_recording_time_text
+        # Programar guardado automático
+        Clock.unschedule(self.save_config)
+        Clock.schedule_once(lambda dt: self.save_config(show_messages=False), 1)
+            
+    def open_audio_config(self, instance=None):
+        """Abre la configuración de audio en un popup"""
+        # Contenido del popup
+        content = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
         
         # Título
-        title_label = ttk.Label(main_frame, text="Configuración de Audio", font=('Arial', 14, 'bold'))
-        title_label.pack(pady=(0, 20))
+        title_label = Label(
+            text="Configuración de Audio",
+            size_hint_y=None,
+            height=dp(30),
+            font_size='16sp',
+            bold=True
+        )
+        content.add_widget(title_label)
         
         # Selector de micrófono
-        mic_frame = ttk.LabelFrame(main_frame, text="Selección de Micrófono", padding="15")
-        mic_frame.pack(fill="x", pady=(0, 20))
+        mic_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(120), spacing=dp(10))
+        mic_layout.add_widget(Label(text="Selección de Micrófono", font_size='14sp', bold=True, size_hint_y=None, height=dp(25)))
         
-        ttk.Label(mic_frame, text="Micrófono:").pack(anchor="w")
+        device_names = [device['display_name'] for device in self.audio_devices]
+        if not device_names:
+            device_names = ["Dispositivo por defecto del sistema"]
+            
+        self.device_spinner = Spinner(
+            text=self.selected_device_text or (device_names[0] if device_names else "No disponible"),
+            values=device_names,
+            size_hint_y=None,
+            height=dp(40)
+        )
+        mic_layout.add_widget(self.device_spinner)
         
-        # Información adicional
-        info_label = ttk.Label(mic_frame, 
-                              text="Selecciona el dispositivo de entrada. Solo se muestran dispositivos compatibles con la configuración actual.",
-                              font=('Arial', 9), foreground='gray', wraplength=450)
-        info_label.pack(anchor="w", pady=(0, 10))
-        
-        # Frame para el combo y botón
-        combo_frame = ttk.Frame(mic_frame)
-        combo_frame.pack(fill="x", pady=5)
-        
-        device_combo = ttk.Combobox(combo_frame, textvariable=self.selected_device, 
-                                   state="readonly")
-        device_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
-        refresh_btn = ttk.Button(combo_frame, text="🔄 Refrescar Dispositivos", 
-                               command=lambda: self.refresh_devices_modal(device_combo))
-        refresh_btn.pack(side="right")
+        refresh_btn = Button(
+            text="Refrescar Dispositivos",
+            size_hint_y=None,
+            height=dp(35),
+            on_press=self.refresh_devices_popup
+        )
+        mic_layout.add_widget(refresh_btn)
+        content.add_widget(mic_layout)
         
         # Configuración de calidad
-        quality_frame = ttk.LabelFrame(main_frame, text="Calidad de Audio", padding="15")
-        quality_frame.pack(fill="x", pady=(0, 20))
-        
-        # Información sobre calidad
-        quality_info = ttk.Label(quality_frame, 
-                               text="Configura la calidad de audio. Mayor frecuencia y bits = mejor calidad pero archivos más grandes.",
-                               font=('Arial', 9), foreground='gray', wraplength=450)
-        quality_info.pack(anchor="w", pady=(0, 15))
-        
-        # Frame para controles de calidad en grid
-        controls_frame = ttk.Frame(quality_frame)
-        controls_frame.pack(fill="x")
+        quality_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(180), spacing=dp(10))
+        quality_layout.add_widget(Label(text="Calidad de Audio", font_size='14sp', bold=True, size_hint_y=None, height=dp(25)))
         
         # Frecuencia de muestreo
-        ttk.Label(controls_frame, text="Frecuencia de muestreo:").grid(row=0, column=0, sticky="w", pady=5)
-        sample_combo = ttk.Combobox(controls_frame, textvariable=self.sample_rate,
-                                   values=["44100", "48000", "96000"], state="readonly", width=15)
-        sample_combo.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
+        sample_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(35))
+        sample_layout.add_widget(Label(text="Frecuencia:", size_hint_x=0.4))
+        self.sample_rate_spinner = Spinner(
+            text=self.sample_rate_text,
+            values=["44100", "48000", "96000"],
+            size_hint_x=0.6
+        )
+        sample_layout.add_widget(self.sample_rate_spinner)
+        quality_layout.add_widget(sample_layout)
         
         # Profundidad de bits
-        ttk.Label(controls_frame, text="Profundidad de bits:").grid(row=1, column=0, sticky="w", pady=5)
-        bit_combo = ttk.Combobox(controls_frame, textvariable=self.bit_depth,
-                                values=["16", "24", "32"], state="readonly", width=15)
-        bit_combo.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
+        bit_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(35))
+        bit_layout.add_widget(Label(text="Bits:", size_hint_x=0.4))
+        self.bit_depth_spinner = Spinner(
+            text=self.bit_depth_text,
+            values=["16", "24", "32"],
+            size_hint_x=0.6
+        )
+        bit_layout.add_widget(self.bit_depth_spinner)
+        quality_layout.add_widget(bit_layout)
         
         # Canales
-        ttk.Label(controls_frame, text="Canales:").grid(row=2, column=0, sticky="w", pady=5)
-        channels_combo = ttk.Combobox(controls_frame, textvariable=self.channels_mode,
-                                     values=["Mono", "Estéreo"], state="readonly", width=15)
-        channels_combo.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
+        channels_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(35))
+        channels_layout.add_widget(Label(text="Canales:", size_hint_x=0.4))
+        self.channels_spinner = Spinner(
+            text=self.channels_mode_text,
+            values=["Mono", "Estéreo"],
+            size_hint_x=0.6
+        )
+        channels_layout.add_widget(self.channels_spinner)
+        quality_layout.add_widget(channels_layout)
+        content.add_widget(quality_layout)
         
         # Botones
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x", pady=(20, 0))
+        buttons_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
         
-        ttk.Button(button_frame, text="✅ Aplicar y Cerrar", 
-                  command=lambda: self.apply_audio_config_modal(audio_window)).pack(side="right", padx=(10, 0))
-        ttk.Button(button_frame, text="❌ Cancelar", 
-                  command=audio_window.destroy).pack(side="right")
+        cancel_btn = Button(
+            text="Cancelar",
+            size_hint_x=0.5,
+            on_press=lambda x: popup.dismiss()
+        )
+        buttons_layout.add_widget(cancel_btn)
         
-        # Inicializar valores en el modal
-        device_combo['values'] = [device['display_name'] for device in self.audio_devices]
+        apply_btn = Button(
+            text="Aplicar",
+            size_hint_x=0.5,
+            on_press=lambda x: self.apply_audio_config_popup(popup)
+        )
+        buttons_layout.add_widget(apply_btn)
+        content.add_widget(buttons_layout)
         
-    def open_recording_config(self):
-        """Abre la ventana modal de configuración de grabación"""
-        # Crear ventana modal
-        config_window = tk.Toplevel(self.root)
-        config_window.title("Configuración de Grabación")
-        config_window.geometry("450x550")
-        config_window.resizable(False, False)
-        config_window.transient(self.root)
-        config_window.grab_set()  # Modal
+        # Crear popup
+        popup = Popup(
+            title="Configuración de Audio",
+            content=content,
+            size_hint=(0.9, 0.8)
+        )
+        popup.open()
         
-        # Centrar la ventana
-        config_window.geometry("+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50))
+    def refresh_devices_popup(self, instance=None):
+        """Refresca los dispositivos en el popup"""
+        try:
+            device_names = self.refresh_audio_devices()
+            if hasattr(self, 'device_spinner'):
+                self.device_spinner.values = device_names
+            self.show_message("Dispositivos actualizados", f"Se encontraron {len(device_names)} dispositivos")
+        except Exception as e:
+            self.show_message("Error", f"Error refrescando dispositivos: {str(e)}")
         
-        # Frame principal
-        main_frame = ttk.Frame(config_window, padding="20")
-        main_frame.pack(fill="both", expand=True)
+    def apply_audio_config_popup(self, popup):
+        """Aplica la configuración de audio desde el popup"""
+        try:
+            # Actualizar valores desde los spinners
+            if hasattr(self, 'device_spinner'):
+                self.selected_device_text = self.device_spinner.text
+            if hasattr(self, 'sample_rate_spinner'):
+                self.sample_rate_text = self.sample_rate_spinner.text
+            if hasattr(self, 'bit_depth_spinner'):
+                self.bit_depth_text = self.bit_depth_spinner.text
+            if hasattr(self, 'channels_spinner'):
+                self.channels_mode_text = self.channels_spinner.text
+                
+            self.apply_audio_quality()
+            self.save_config(show_messages=True)
+            popup.dismiss()
+        except Exception as e:
+            self.show_message("Error", f"Error aplicando configuración: {str(e)}")
+        
+    def open_recording_config(self, instance=None):
+        """Abre la configuración de grabación en un popup"""
+        content = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
         
         # Título
-        title_label = ttk.Label(main_frame, text="Configuración de Grabación", font=('Arial', 14, 'bold'))
-        title_label.pack(pady=(0, 20))
+        title_label = Label(
+            text="Configuración de Grabación",
+            size_hint_y=None,
+            height=dp(30),
+            font_size='16sp',
+            bold=True
+        )
+        content.add_widget(title_label)
         
         # Umbral de volumen
-        threshold_frame = ttk.LabelFrame(main_frame, text="Umbral de Volumen", padding="15")
-        threshold_frame.pack(fill="x", pady=(0, 15))
+        threshold_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(120), spacing=dp(10))
+        threshold_layout.add_widget(Label(text="Umbral de Volumen (dB)", font_size='14sp', bold=True, size_hint_y=None, height=dp(25)))
         
-        # Información sobre el umbral
-        threshold_info = ttk.Label(threshold_frame,
-                                 text="Solo se guardarán las grabaciones que superen este umbral de volumen. Valores más altos = más selectivo.",
-                                 font=('Arial', 9), foreground='gray', wraplength=380)
-        threshold_info.pack(anchor="w", pady=(0, 10))
+        self.threshold_slider = Slider(
+            min=self.config_min_threshold_db,
+            max=self.config_max_threshold_db,
+            value=self.threshold_db,
+            step=1,
+            size_hint_y=None,
+            height=dp(30)
+        )
+        self.threshold_slider.bind(value=self.on_threshold_change)
+        threshold_layout.add_widget(self.threshold_slider)
         
-        ttk.Label(threshold_frame, text="Umbral de volumen (dB):").pack(anchor="w")
-        
-        threshold_scale = ttk.Scale(threshold_frame, from_=self.config_min_threshold_db, to=self.config_max_threshold_db,
-                                   variable=self.threshold_db, orient=tk.HORIZONTAL, length=300)
-        threshold_scale.pack(fill="x", pady=8)
-        
-        self.threshold_label_modal = ttk.Label(threshold_frame, text=f"{self.threshold_db.get():.1f} dB")
-        self.threshold_label_modal.pack(anchor="w")
-        
-        threshold_scale.configure(command=self.update_threshold_label_modal)
+        self.threshold_value_label = Label(
+            text=f"{self.threshold_db:.1f} dB",
+            size_hint_y=None,
+            height=dp(25)
+        )
+        threshold_layout.add_widget(self.threshold_value_label)
+        content.add_widget(threshold_layout)
         
         # Duración de grabación
-        duration_frame = ttk.LabelFrame(main_frame, text="Duración de Grabación", padding="15")
-        duration_frame.pack(fill="x", pady=(0, 15))
+        duration_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(120), spacing=dp(10))
+        duration_layout.add_widget(Label(text="Duración de Grabación (segundos)", font_size='14sp', bold=True, size_hint_y=None, height=dp(25)))
         
-        # Información sobre la duración
-        duration_info = ttk.Label(duration_frame,
-                                text="Duración de cada tramo de grabación. Tramos más largos detectan mejor el audio pero ocupan más espacio.",
-                                font=('Arial', 9), foreground='gray', wraplength=380)
-        duration_info.pack(anchor="w", pady=(0, 10))
+        self.duration_slider = Slider(
+            min=10,
+            max=60,
+            value=self.record_duration,
+            step=1,
+            size_hint_y=None,
+            height=dp(30)
+        )
+        self.duration_slider.bind(value=self.on_duration_change)
+        duration_layout.add_widget(self.duration_slider)
         
-        ttk.Label(duration_frame, text="Duración de grabación (segundos):").pack(anchor="w")
-        
-        duration_scale = ttk.Scale(duration_frame, from_=10, to=60,
-                                  variable=self.record_duration, orient=tk.HORIZONTAL, length=300)
-        duration_scale.pack(fill="x", pady=8)
-        
-        self.duration_label_modal = ttk.Label(duration_frame, text=f"{self.record_duration.get():.0f} seg")
-        self.duration_label_modal.pack(anchor="w")
-        
-        duration_scale.configure(command=self.update_duration_label_modal)
+        self.duration_value_label = Label(
+            text=f"{self.record_duration:.0f} seg",
+            size_hint_y=None,
+            height=dp(25)
+        )
+        duration_layout.add_widget(self.duration_value_label)
+        content.add_widget(duration_layout)
         
         # Botones
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x", pady=(20, 0))
+        buttons_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
         
-        ttk.Button(button_frame, text="✅ Aplicar", 
-                  command=lambda: self.close_recording_config(config_window)).pack(side="right", padx=(10, 0))
-        ttk.Button(button_frame, text="❌ Cancelar", 
-                  command=config_window.destroy).pack(side="right")
-                  
-    def close_recording_config(self, window):
-        """Cierra la ventana de configuración de grabación y guarda automáticamente"""
+        cancel_btn = Button(
+            text="Cancelar",
+            size_hint_x=0.5,
+            on_press=lambda x: popup.dismiss()
+        )
+        buttons_layout.add_widget(cancel_btn)
+        
+        apply_btn = Button(
+            text="Aplicar",
+            size_hint_x=0.5,
+            on_press=lambda x: self.close_recording_config_popup(popup)
+        )
+        buttons_layout.add_widget(apply_btn)
+        content.add_widget(buttons_layout)
+        
+        popup = Popup(
+            title="Configuración de Grabación",
+            content=content,
+            size_hint=(0.8, 0.7)
+        )
+        popup.open()
+        
+    def close_recording_config_popup(self, popup):
+        """Cierra el popup de configuración de grabación y guarda automáticamente"""
         try:
-            # Guardar configuración automáticamente
             self.save_config(show_messages=True)
-            window.destroy()
+            popup.dismiss()
         except Exception as e:
-            messagebox.showerror("Error", f"Error guardando configuración: {str(e)}")
+            self.show_message("Error", f"Error guardando configuración: {str(e)}")
             
-    def show_about(self):
-        """Muestra información acerca del programa"""
-        about_text = """Grabador de Audio con Detección de Volumen v2.0
+    def show_exit_confirmation(self, instance=None):
+        """Muestra una ventana de confirmación para salir de la aplicación"""
+        popup_content = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
         
-Características:
-• Grabación continua con duración configurable
-• Detección automática de volumen
-• Selección de micrófono
-• Alta calidad de audio configurable
-• Guardado automático inteligente
-
-Creado con Python y Tkinter"""
+        # Mensaje de confirmación
+        message_label = Label(
+            text="¿Estás seguro de que deseas salir de la aplicación?",
+            text_size=(dp(300), None),
+            halign='center',
+            valign='middle',
+            font_size='16sp'
+        )
+        popup_content.add_widget(message_label)
         
-        messagebox.showinfo("Acerca de", about_text)
+        # Información adicional si está grabando
+        if self.is_recording:
+            warning_label = Label(
+                text="⚠️ La grabación se detendrá automáticamente",
+                text_size=(dp(300), None),
+                halign='center',
+                valign='middle',
+                font_size='14sp',
+                color=(1, 0.5, 0, 1)  # Color naranja para advertencia
+            )
+            popup_content.add_widget(warning_label)
+        
+        # Botones
+        buttons_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
+        
+        cancel_btn = Button(
+            text="Cancelar",
+            size_hint_x=0.5,
+            on_press=lambda x: popup.dismiss()
+        )
+        buttons_layout.add_widget(cancel_btn)
+        
+        exit_btn = Button(
+            text="Salir",
+            size_hint_x=0.5,
+            on_press=lambda x: self.exit_application(popup)
+        )
+        buttons_layout.add_widget(exit_btn)
+        
+        popup_content.add_widget(buttons_layout)
+        
+        popup = Popup(
+            title="Confirmar Salida",
+            content=popup_content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False  # No permitir cerrar haciendo clic fuera
+        )
+        popup.open()
+        
+    def exit_application(self, popup):
+        """Cierra la aplicación de forma segura"""
+        popup.dismiss()
+        
+        # Detener grabación si está activa
+        if self.is_recording:
+            self.stop_recording()
+        
+        # Guardar configuración
+        self.save_config(show_messages=False)
+        
+        # Cerrar PyAudio si está abierto
+        if hasattr(self, 'audio') and self.audio:
+            self.audio.terminate()
+            self.audio = None
+        
+        # Cerrar la aplicación
+        import sys
+        sys.exit(0)
         
     def refresh_devices_modal(self, combo_widget):
         """Refresca los dispositivos en el modal de audio"""
@@ -666,13 +947,15 @@ Creado con Python y Tkinter"""
             self.update_device_list()
             
             if device_names and device_names[0] != "Error obteniendo dispositivos":
-                messagebox.showinfo("Dispositivos actualizados", 
-                                  f"Se encontraron {len(device_names)} dispositivos de entrada")
+                self.show_message("Dispositivos actualizados", 
+                                  f"Se encontraron {len(device_names)} dispositivos de entrada",
+                                  "info")
             else:
-                messagebox.showwarning("Sin dispositivos", 
-                                     "No se encontraron dispositivos de entrada disponibles")
+                self.show_message("Sin dispositivos", 
+                                     "No se encontraron dispositivos de entrada disponibles",
+                                     "warning")
         except Exception as e:
-            messagebox.showerror("Error", f"Error refrescando dispositivos: {str(e)}")
+            self.show_message("Error", f"Error refrescando dispositivos: {str(e)}", "error")
             
     def apply_audio_config_modal(self, window):
         """Aplica la configuración de audio desde el modal y guarda en config.ini"""
@@ -682,7 +965,7 @@ Creado con Python y Tkinter"""
             self.save_config(show_messages=True)
             window.destroy()
         except Exception as e:
-            messagebox.showerror("Error", f"Error aplicando configuración: {str(e)}")
+            self.show_message("Error", f"Error aplicando configuración: {str(e)}", "error")
             
     def update_threshold_label_modal(self, value):
         """Actualiza la etiqueta del umbral en el modal y programa guardado automático"""
@@ -691,10 +974,10 @@ Creado con Python y Tkinter"""
             
         # Cancelar timer anterior si existe
         if hasattr(self, 'threshold_save_timer'):
-            self.root.after_cancel(self.threshold_save_timer)
+            Clock.unschedule(self.threshold_save_timer)
             
         # Programar guardado automático con retraso de 1 segundo
-        self.threshold_save_timer = self.root.after(1000, self.save_config)
+        self.threshold_save_timer = Clock.schedule_once(lambda dt: self.save_config(), 1)
             
     def update_duration_label_modal(self, value):
         """Actualiza la etiqueta de duración en el modal y programa guardado automático"""
@@ -704,14 +987,16 @@ Creado con Python y Tkinter"""
         # Actualizar también el contador de tiempo si no estamos grabando
         if not self.is_recording:
             duration_int = int(float(value))
-            self.current_recording_time.set(f"0/{duration_int} seg")
+            self.current_recording_time_text = f"0/{duration_int} seg"
+            if hasattr(self, 'current_recording_time_label'):
+                self.current_recording_time_label.text = self.current_recording_time_text
             
         # Cancelar timer anterior si existe
         if hasattr(self, 'duration_save_timer'):
-            self.root.after_cancel(self.duration_save_timer)
+            Clock.unschedule(self.duration_save_timer)
             
         # Programar guardado automático con retraso de 1 segundo
-        self.duration_save_timer = self.root.after(1000, self.save_config)
+        self.duration_save_timer = Clock.schedule_once(lambda dt: self.save_config(), 1)
         
     def update_threshold_label(self, value):
         """Actualiza la etiqueta del umbral cuando cambia el slider (mantener para compatibilidad)"""
@@ -724,7 +1009,7 @@ Creado con Python y Tkinter"""
     def apply_audio_quality(self):
         """Aplica la configuración de calidad de audio con validación"""
         if self.is_recording:
-            messagebox.showwarning("Advertencia", "No se puede cambiar la calidad durante la grabación")
+            self.show_message("Advertencia", "No se puede cambiar la calidad durante la grabación", "warning")
             return
             
         try:
@@ -738,9 +1023,9 @@ Creado con Python y Tkinter"""
                     break
             
             # Configuración propuesta
-            proposed_rate = int(self.sample_rate.get())
-            proposed_bit_depth = int(self.bit_depth.get())
-            proposed_channels = 2 if self.channels_mode.get() == "Estéreo" else 1
+            proposed_rate = int(self.sample_rate_text)
+            proposed_bit_depth = int(self.bit_depth_text)
+            proposed_channels = 2 if self.channels_mode_text == "Estéreo" else 1
             
             # Validar con el dispositivo seleccionado
             if selected_device_info:
@@ -748,10 +1033,12 @@ Creado con Python y Tkinter"""
                 max_device_channels = selected_device_info.get('channels', 1)
                 if proposed_channels > max_device_channels:
                     proposed_channels = max_device_channels
-                    self.channels_mode.set("Mono" if proposed_channels == 1 else "Estéreo")
-                    messagebox.showwarning("Ajuste automático", 
+                    if hasattr(self, 'channels_spinner'):
+                        self.channels_spinner.text = "Mono" if proposed_channels == 1 else "Estéreo"
+                    self.show_message("Ajuste automático", 
                                          f"El dispositivo seleccionado solo soporta {max_device_channels} canal(es). "
-                                         f"Configurando a {'Mono' if proposed_channels == 1 else 'Estéreo'}.")
+                                         f"Configurando a {'Mono' if proposed_channels == 1 else 'Estéreo'}.",
+                                         "warning")
             
             # Probar la configuración antes de aplicarla
             test_audio = pyaudio.PyAudio()
@@ -794,8 +1081,9 @@ Creado con Python y Tkinter"""
             except Exception as e:
                 # Si falla, usar configuración segura
                 print(f"Configuración propuesta falló: {e}")
-                messagebox.showwarning("Configuración no soportada", 
-                                     "La configuración seleccionada no es compatible. Usando configuración estándar segura.")
+                self.show_message("Configuración no soportada", 
+                                     "La configuración seleccionada no es compatible. Usando configuración estándar segura.",
+                                     "warning")
                 
                 # Configuración de emergencia
                 self.RATE = 44100
@@ -804,38 +1092,47 @@ Creado con Python y Tkinter"""
                 self.CHUNK = 1024
                 
                 # Actualizar los controles
-                self.sample_rate.set("44100")
-                self.bit_depth.set("16")
-                self.channels_mode.set("Mono")
+                if hasattr(self, 'sample_rate_spinner'):
+                    self.sample_rate_spinner.text = "44100"
+                if hasattr(self, 'bit_depth_spinner'):
+                    self.bit_depth_spinner.text = "16"  
+                if hasattr(self, 'channels_spinner'):
+                    self.channels_spinner.text = "Mono"
                 
             test_audio.terminate()
             
             # Actualizar la información de calidad mostrada
             bit_depth_display = "16" if self.FORMAT == pyaudio.paInt16 else "24" if self.FORMAT == pyaudio.paInt24 else "32"
             channels_text = 'Estéreo' if self.CHANNELS == 2 else 'Mono'
-            self.quality_info.set(f"{self.RATE}Hz, {bit_depth_display}bit, {channels_text}")
+            self.quality_info_text = f"{self.RATE}Hz, {bit_depth_display}bit, {channels_text}"
+            if hasattr(self, 'quality_info_label'):
+                self.quality_info_label.text = self.quality_info_text
             
             # Actualizar información del micrófono
-            selected_name = self.selected_device.get()
+            selected_name = self.selected_device_name if hasattr(self, 'selected_device_name') else ""
             if selected_name and selected_name != "Dispositivo por defecto del sistema":
                 # Extraer solo el nombre del dispositivo (sin el ID)
                 mic_name = selected_name.split(' (ID:')[0]
                 if len(mic_name) > 25:
                     mic_name = mic_name[:25] + "..."
-                self.mic_info.set(mic_name)
+                self.mic_info_text = mic_name
             else:
-                self.mic_info.set("Dispositivo por defecto")
+                self.mic_info_text = "Dispositivo por defecto"
+            
+            if hasattr(self, 'mic_info_label'):
+                self.mic_info_label.text = self.mic_info_text
                 
-            messagebox.showinfo("Éxito", 
+            self.show_message("Éxito", 
                 f"Configuración aplicada correctamente:\n"
                 f"• Frecuencia: {self.RATE} Hz\n"
                 f"• Bits: {bit_depth_display} bits\n"
                 f"• Canales: {self.CHANNELS} ({channels_text})\n"
                 f"• Buffer: {self.CHUNK} frames\n"
-                f"• Micrófono: {self.mic_info.get()}")
+                f"• Micrófono: {self.mic_info_text}",
+                "info")
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Error al aplicar configuración: {str(e)}\nUsando configuración por defecto.")
+            self.show_message("Error", f"Error al aplicar configuración: {str(e)}\nUsando configuración por defecto.", "error")
             # Configuración de emergencia
             self.RATE = 44100
             self.FORMAT = pyaudio.paInt16
@@ -848,18 +1145,20 @@ Creado con Python y Tkinter"""
             self.update_device_list()
             
             if device_names and device_names[0] != "Error obteniendo dispositivos":
-                messagebox.showinfo("Dispositivos actualizados", 
-                                  f"Se encontraron {len(device_names)} dispositivos de entrada")
+                self.show_message("Dispositivos actualizados", 
+                                  f"Se encontraron {len(device_names)} dispositivos de entrada",
+                                  "info")
             else:
-                messagebox.showwarning("Sin dispositivos", 
-                                     "No se encontraron dispositivos de entrada disponibles")
+                self.show_message("Sin dispositivos", 
+                                     "No se encontraron dispositivos de entrada disponibles",
+                                     "warning")
                                      
         except Exception as e:
-            messagebox.showerror("Error", f"Error refrescando dispositivos: {str(e)}")
+            self.show_message("Error", f"Error refrescando dispositivos: {str(e)}", "error")
             
     def get_selected_device_index(self):
         """Obtiene el índice del dispositivo seleccionado"""
-        selected_name = self.selected_device.get()
+        selected_name = self.selected_device_name if hasattr(self, 'selected_device_name') else ""
         
         for device in self.audio_devices:
             if device['display_name'] == selected_name:
@@ -930,7 +1229,7 @@ Creado con Python y Tkinter"""
         try:
             # Reiniciar el estado del tramo actual
             self.current_max_volume = -60.0
-            self.root.after(0, self.update_current_status, "Grabando...")
+            self.update_current_status("Grabando...")
             
             # Obtener el índice del dispositivo seleccionado
             device_index = self.get_selected_device_index()
@@ -977,7 +1276,7 @@ Creado con Python y Tkinter"""
             
             frames = []
             max_volume_db = -60
-            record_seconds = self.record_duration.get()
+            record_seconds = self.record_duration
             
             # Inicializar el tiempo de inicio
             import time as time_module
@@ -1000,7 +1299,8 @@ Creado con Python y Tkinter"""
                     total_seconds = int(record_seconds)
                     
                     # Actualizar tiempo en la interfaz
-                    self.root.after(0, lambda: self.current_recording_time.set(f"{elapsed_seconds}/{total_seconds} seg"))
+                    Clock.schedule_once(lambda dt: setattr(self, 'current_recording_time_text', f"{elapsed_seconds}/{total_seconds} seg") or 
+                                     (hasattr(self, 'current_recording_time_label') and setattr(self.current_recording_time_label, 'text', self.current_recording_time_text)))
                     
                     # Calcular volumen actual
                     current_db = self.calculate_db(data)
@@ -1008,8 +1308,8 @@ Creado con Python y Tkinter"""
                     self.current_max_volume = max_volume_db
                     
                     # Actualizar UI en el hilo principal
-                    self.root.after(0, self.update_volume_display, current_db)
-                    self.root.after(0, self.update_current_status_by_volume)
+                    Clock.schedule_once(lambda dt: self.update_volume_display(current_db))
+                    Clock.schedule_once(lambda dt: self.update_current_status_by_volume())
                     
                 except Exception as e:
                     print(f"Error leyendo datos de audio: {e}")
@@ -1023,38 +1323,47 @@ Creado con Python y Tkinter"""
             
         except Exception as e:
             print(f"Error en record_audio_chunk: {e}")
-            messagebox.showerror("Error de Grabación", 
+            # Programar el mensaje de error para el hilo principal
+            Clock.schedule_once(lambda dt: self.show_message("Error de Grabación", 
                                f"Error durante la grabación: {str(e)}\n\n"
                                "Sugerencias:\n"
                                "• Verificar que el micrófono esté conectado\n"
                                "• Probar con configuración más simple (16-bit, Mono, 44.1kHz)\n"
-                               "• Seleccionar otro dispositivo de audio")
+                               "• Seleccionar otro dispositivo de audio",
+                               "error"))
             return None, -60
             
     def update_volume_display(self, db_level):
         """Actualiza la visualización del volumen"""
-        self.current_volume.set(f"{db_level:.1f} dB")
+        self.current_volume_text = f"{db_level:.1f} dB"
+        if hasattr(self, 'current_volume_label'):
+            self.current_volume_label.text = self.current_volume_text
         
         # Actualizar barra de progreso (convertir dB a porcentaje)
         # -60 dB = 0%, 0 dB = 100%
         percentage = max(0, min(100, (db_level + 60) * 100 / 60))
-        self.volume_bar['value'] = percentage
+        if hasattr(self, 'volume_bar'):
+            self.volume_bar.value = percentage
         
     def update_current_status(self, status_text):
         """Actualiza el texto de estado del tramo actual"""
-        self.will_save_current.set(status_text)
+        self.will_save_current_text = status_text
+        if hasattr(self, 'current_status_label'):
+            self.current_status_label.text = status_text
         
     def update_current_status_by_volume(self):
         """Actualiza el estado del tramo actual basado en el volumen máximo detectado"""
-        threshold = self.threshold_db.get()
-        if self.current_max_volume >= threshold:
-            self.will_save_current.set(f"✅ SE GUARDARÁ (Max: {self.current_max_volume:.1f} dB)")
-            # Cambiar color a verde
-            self.current_status_label.config(foreground='green')
+        if self.current_max_volume >= self.threshold_db:
+            status_text = f"SE GUARDARÁ (Max: {self.current_max_volume:.1f} dB)"
+            color = (0, 1, 0, 1)  # Verde
         else:
-            self.will_save_current.set(f"❌ Se eliminará (Max: {self.current_max_volume:.1f} dB)")
-            # Cambiar color a rojo
-            self.current_status_label.config(foreground='red')
+            status_text = f"Se eliminará (Max: {self.current_max_volume:.1f} dB)"
+            color = (1, 0, 0, 1)  # Rojo
+            
+        self.will_save_current_text = status_text
+        if hasattr(self, 'current_status_label'):
+            self.current_status_label.text = status_text
+            self.current_status_label.color = color
         
     def save_recording(self, frames, timestamp=None):
         """Guarda la grabación en un archivo WAV con validación robusta"""
@@ -1103,7 +1412,7 @@ Creado con Python y Tkinter"""
             
             # Verificar que el archivo se creó correctamente
             if os.path.exists(filepath) and os.path.getsize(filepath) > 44:  # 44 bytes = header WAV mínimo
-                self.recordings_saved.set(self.recordings_saved.get() + 1)
+                self.recordings_saved_count += 1
                 print(f"Grabación guardada exitosamente: {filepath}")
                 print(f"Tamaño del archivo: {os.path.getsize(filepath)} bytes")
             else:
@@ -1112,7 +1421,7 @@ Creado con Python y Tkinter"""
         except Exception as e:
             error_msg = f"Error al guardar la grabación: {str(e)}"
             print(error_msg)
-            messagebox.showerror("Error de Guardado", error_msg)
+            self.show_message("Error de Guardado", error_msg, "error")
             
             # Intentar crear un archivo de prueba con configuración básica
             try:
@@ -1132,10 +1441,11 @@ Creado con Python y Tkinter"""
                 
             except Exception as e2:
                 print(f"Error también con configuración básica: {e2}")
-                messagebox.showerror("Error Crítico", 
+                self.show_message("Error Crítico", 
                                    f"No se pudo guardar el archivo de audio.\n"
                                    f"Error original: {str(e)}\n"
-                                   f"Error de respaldo: {str(e2)}")
+                                   f"Error de respaldo: {str(e2)}", 
+                                   "error")
             
     def recording_loop(self):
         """Bucle principal de grabación"""
@@ -1143,74 +1453,87 @@ Creado con Python y Tkinter"""
             timestamp = datetime.now()  # Pasar objeto datetime completo
             
             # Grabar con duración configurable
-            duration = self.record_duration.get()
-            self.status.set(f"Grabando ({duration:.0f}s)...")
+            duration = self.record_duration
+            self.status_text = f"Grabando ({duration:.0f}s)..."
+            if hasattr(self, 'status_label'):
+                Clock.schedule_once(lambda dt: setattr(self.status_label, 'text', self.status_text))
             frames, max_volume = self.record_audio_chunk()
             
             if frames is None:
                 break
                 
             # Verificar si el volumen superó el umbral
-            threshold = self.threshold_db.get()
+            threshold = self.threshold_db
             
             if max_volume >= threshold:
                 # Guardar la grabación
                 self.save_recording(frames, timestamp)
-                self.status.set(f"Grabación guardada (Vol: {max_volume:.1f} dB)")
-                self.root.after(0, self.update_current_status, f"✅ GUARDADA ({max_volume:.1f} dB)")
-                self.root.after(0, lambda: self.current_status_label.config(foreground='green'))
+                self.status_text = f"Grabación guardada (Vol: {max_volume:.1f} dB)"
+                Clock.schedule_once(lambda dt: self.update_current_status(f"GUARDADA ({max_volume:.1f} dB)"))
+                if hasattr(self, 'current_status_label'):
+                    Clock.schedule_once(lambda dt: setattr(self.current_status_label, 'color', (0, 1, 0, 1)))
             else:
                 # Descartar la grabación
-                self.recordings_deleted.set(self.recordings_deleted.get() + 1)
-                self.status.set(f"Grabación descartada (Vol: {max_volume:.1f} dB)")
-                self.root.after(0, self.update_current_status, f"❌ ELIMINADA ({max_volume:.1f} dB)")
-                self.root.after(0, lambda: self.current_status_label.config(foreground='red'))
+                self.recordings_deleted_count += 1
+                self.status_text = f"Grabación descartada (Vol: {max_volume:.1f} dB)"
+                Clock.schedule_once(lambda dt: self.update_current_status(f"ELIMINADA ({max_volume:.1f} dB)"))
+                if hasattr(self, 'current_status_label'):
+                    Clock.schedule_once(lambda dt: setattr(self.current_status_label, 'color', (1, 0, 0, 1)))
                 
             # Pequeña pausa antes del siguiente ciclo
             if self.is_recording:
                 # Resetear el contador de tiempo para mostrar que esperamos el próximo ciclo
                 duration_int = int(duration)
-                self.root.after(0, lambda: self.current_recording_time.set(f"0/{duration_int} seg"))
+                Clock.schedule_once(lambda dt: (
+                    setattr(self, 'current_recording_time_text', f"0/{duration_int} seg") or
+                    (hasattr(self, 'current_recording_time_label') and setattr(self.current_recording_time_label, 'text', self.current_recording_time_text))
+                ))
                 
                 time.sleep(2)  # Pausa un poco más larga para mostrar el resultado
-                self.root.after(0, self.update_current_status, "Esperando...")
-                self.root.after(0, lambda: self.current_status_label.config(foreground='black'))
+                Clock.schedule_once(lambda dt: self.update_current_status("Esperando..."))
+                if hasattr(self, 'current_status_label'):
+                    Clock.schedule_once(lambda dt: setattr(self.current_status_label, 'color', (0, 0, 0, 1)))
                 time.sleep(1)
                 
-    def start_recording(self):
+    def start_recording(self, instance=None):
         """Inicia la grabación en bucle"""
         try:
             self.audio = pyaudio.PyAudio()
             self.is_recording = True
             
             # Deshabilitar botón de inicio y habilitar el de parar
-            self.start_button.config(state=tk.DISABLED)
-            self.stop_button.config(state=tk.NORMAL)
+            self.start_button.disabled = True
+            self.stop_button.disabled = False
             
             # Iniciar el hilo de grabación
             self.recording_thread = threading.Thread(target=self.recording_loop, daemon=True)
             self.recording_thread.start()
             
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo iniciar la grabación: {str(e)}")
+            self.show_message("Error", f"No se pudo iniciar la grabación: {str(e)}", "error")
             self.stop_recording()
             
-    def stop_recording(self):
+    def stop_recording(self, instance=None):
         """Detiene la grabación"""
         self.is_recording = False
-        self.status.set("Detenido")
+        self.status_text = "Detenido"
+        if hasattr(self, 'status_label'):
+            self.status_label.text = self.status_text
         
         # Resetear el estado del tramo actual
-        self.will_save_current.set("Esperando...")
-        self.current_status_label.config(foreground='black')
+        self.will_save_current_text = "Esperando..."
+        if hasattr(self, 'current_status_label'):
+            self.current_status_label.text = self.will_save_current_text
+            self.current_status_label.color = (0, 0, 0, 1)  # Negro
         
         # Resetear el contador de tiempo
-        duration = int(self.record_duration.get())
-        self.current_recording_time.set(f"0/{duration} seg")
+        self.current_recording_time_text = f"0/{self.record_duration} seg"
+        if hasattr(self, 'current_recording_time_label'):
+            self.current_recording_time_label.text = self.current_recording_time_text
         
         # Habilitar botón de inicio y deshabilitar el de parar
-        self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
+        self.start_button.disabled = False
+        self.stop_button.disabled = True
         
         # Cerrar PyAudio
         if self.audio:
@@ -1222,13 +1545,12 @@ Creado con Python y Tkinter"""
         if self.is_recording:
             self.stop_recording()
         # Guardar configuración antes de cerrar
-        self.save_config(show_messages=False)  # Sin mensajes al cerrar
-        self.root.destroy()
+        self.save_config(show_messages=False)
         
-    def run(self):
-        """Ejecuta la aplicación"""
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.root.mainloop()
+        # Cerrar PyAudio si está abierto
+        if hasattr(self, 'audio') and self.audio:
+            self.audio.terminate()
+            self.audio = None  # Sin mensajes al cerrar
 
 if __name__ == "__main__":
     # Verificar dependencias
@@ -1240,5 +1562,5 @@ if __name__ == "__main__":
         print("Ejecuta: pip install pyaudio numpy")
         exit(1)
         
-    app = AudioRecorder()
+    app = AudioRecorderApp()
     app.run()
