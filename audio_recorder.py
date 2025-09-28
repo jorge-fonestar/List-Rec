@@ -248,11 +248,13 @@ class AudioRecorder:
                 f.write(f"# Limitar el nivel mínimo de dB mostrado\n")
                 f.write(f"MIN_DISPLAY_DB = {self.config_min_display_db}\n")
                 
-            print(f"Configuración guardada en {self.config_file}")
+            if show_messages:
+                print(f"Configuración guardada en {self.config_file}")
             
         except Exception as e:
             print(f"Error guardando configuración: {e}")
-            messagebox.showerror("Error", f"No se pudo guardar la configuración: {str(e)}")
+            if show_messages:
+                messagebox.showerror("Error", f"No se pudo guardar la configuración: {str(e)}")
         
     def refresh_audio_devices(self):
         """Obtiene la lista de dispositivos de audio de entrada disponibles y los valida"""
@@ -636,7 +638,7 @@ class AudioRecorder:
         """Cierra la ventana de configuración de grabación y guarda automáticamente"""
         try:
             # Guardar configuración automáticamente
-            self.save_config()
+            self.save_config(show_messages=True)
             window.destroy()
         except Exception as e:
             messagebox.showerror("Error", f"Error guardando configuración: {str(e)}")
@@ -677,7 +679,7 @@ Creado con Python y Tkinter"""
         try:
             self.apply_audio_quality()
             # Guardar configuración actualizada
-            self.save_config()
+            self.save_config(show_messages=True)
             window.destroy()
         except Exception as e:
             messagebox.showerror("Error", f"Error aplicando configuración: {str(e)}")
@@ -1220,7 +1222,7 @@ Creado con Python y Tkinter"""
         if self.is_recording:
             self.stop_recording()
         # Guardar configuración antes de cerrar
-        self.save_config()
+        self.save_config(show_messages=False)  # Sin mensajes al cerrar
         self.root.destroy()
         
     def run(self):
