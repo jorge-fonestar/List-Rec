@@ -1,0 +1,62 @@
+# Buildozer files
+.buildozer/
+bin/
+*.apk
+*.aab
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Audio files (except samples)
+*.wav
+*.mp3
+*.flac
+!sample_*.wav
+
+# Config files (keep templates)
+config.ini
+!config_android.ini
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
